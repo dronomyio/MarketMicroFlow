@@ -1,0 +1,277 @@
+# Makefile for Polygon WebSocket to Kafka to Vertica Streamer
+
+# Variables
+APP_NAME = polygon-vertica-streamer
+GO_FILES = main_official_with_vertica.go
+BUILD_DIR = build
+BINARY = $(BUILD_DIR)/$(APP_NAME)
+
+# Go build flags
+LDFLAGS = -ldflags "-X main.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo 'dev')"
+BUILD_FLAGS = -v $(LDFLAGS)
+
+# Default target
+.PHONY: all
+all: clean build
+
+# Build the application
+.PHONY: build
+build: $(BINARY)
+
+$(BINARY): $(GO_FILES) go.mod
+	@echo "🔨 Building $(APP_NAME)..."
+	@mkdir -p $(BUILD_DIR)
+	@export PATH=$$PATH:/usr/local/go/bin && \
+	 cp go_vertica.mod go.mod && \
+	 go mod tidy && \
+	 go build $(BUILD_FLAGS) -o $(BINARY) $(GO_FILES)
+	@echo "✅ Build complete: $(BINARY)"
+
+# Clean build artifacts
+.PHONY: clean
+clean:
+	@echo "🧹 Cleaning build artifacts..."
+	@rm -rf $(BUILD_DIR)
+	@rm -f go.mod go.sum
+	@echo "✅ Clean complete"
+
+# Run the application
+.PHONY: run
+run: build
+	@echo "🚀 Starting $(APP_NAME)..."
+	@./$(BINARY)
+
+# Run with environment variables
+.PHONY: run-dev
+run-dev: build
+	@echo "🚀 Starting $(APP_NAME) in development mode..."
+	@export POLYGON_API_KEY="$(POLYGON_API_KEY)" && \
+	 export KAFKA_BROKERS="localhost:9092" && \
+	 export KAFKA_TOPIC="polygon-market-data" && \
+	 export VERTICA_HOST="localhost" && \
+	 export VERTICA_PORT="5433" && \
+	 export VERTICA_DB="polygon_data" && \
+	 export VERTICA_USER="dbadmin" && \
+	 export VERTICA_PASS="" && \
+	 export SYMBOLS="AAPL,MSFT,GOOGL,AMZN,TSLA,NVDA" && \
+	 ./$(BINARY)
+
+# Test the application
+.PHONY: test
+test:
+	@echo "🧪 Running tests..."
+	@export PATH=$$PATH:/usr/local/go/bin && \
+	 cp go_vertica.mod go.mod && \
+	 go mod tidy && \
+	 go test -v ./...
+
+# Format Go code
+.PHONY: fmt
+fmt:
+	@echo "📝 Formatting Go code..."
+	@export PATH=$$PATH:/usr/local/go/bin && go fmt ./...
+
+# Lint Go code
+.PHONY: lint
+lint:
+	@echo "🔍 Linting Go code..."
+	@export PATH=$$PATH:/usr/local/go/bin && \
+	 if command -v golangci-lint >/dev/null 2>&1; then \
+	   golangci-lint run; \
+	 else \
+	   echo "⚠️  golangci-lint not installed, skipping lint"; \
+	 fi
+
+# Install dependencies
+.PHONY: deps
+deps:
+	@echo "📦 Installing dependencies..."
+	@export PATH=$$PATH:/usr/local/go/bin && \
+	 cp go_vertica.mod go.mod && \
+	 go mod tidy && \
+	 go mod download
+
+# Create release build
+.PHONY: release
+release: clean
+	@echo "🎁 Creating release build..."
+	@mkdir -p $(BUILD_DIR)
+	@export PATH=$$PATH:/usr/local/go/bin && \
+	 cp go_vertica.mod go.mod && \
+	 go mod tidy && \
+	 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+	   -ldflags "-s -w -X main.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo 'release')" \
+	   -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64 $(GO_FILES)
+	@echo "✅ Release build complete: $(BUILD_DIR)/$(APP_NAME)-linux-amd64"
+
+# Setup development environment
+.PHONY: setup
+setup:
+	@echo "🛠️  Setting up development environment..."
+	@echo "Checking Go installation..."
+	@if ! command -v go >/dev/null 2>&1; then \
+	   echo "❌ Go not found. Please install Go 1.21 or later"; \
+	   exit 1; \
+	 fi
+	@echo "✅ Go found: $$(go version)"
+	@echo "Installing dependencies..."
+	@$(MAKE) deps
+	@echo "✅ Development environment ready"
+
+# Check prerequisites
+.PHONY: check
+check:
+	@echo "🔍 Checking prerequisites..."
+	@echo "Checking Go..."
+	@if ! command -v go >/dev/null 2>&1; then \
+	   echo "❌ Go not installed"; \
+	   exit 1; \
+	 fi
+	@echo "✅ Go: $$(go version)"
+	
+	@echo "Checking Kafka..."
+	@if ! docker ps | grep -q kafka; then \
+	   echo "⚠️  Kafka container not running"; \
+	   echo "   Run: ./start_kafka.sh"; \
+	 else \
+	   echo "✅ Kafka container running"; \
+	 fi
+	
+	@echo "Checking environment variables..."
+	@if [ -z "$(POLYGON_API_KEY)" ]; then \
+	   echo "⚠️  POLYGON_API_KEY not set"; \
+	   echo "   Run: export POLYGON_API_KEY='your_api_key'"; \
+	 else \
+	   echo "✅ POLYGON_API_KEY set"; \
+	 fi
+
+# Start Kafka (if not running)
+.PHONY: start-kafka
+start-kafka:
+	@echo "🚀 Starting Kafka services..."
+	@if ! docker ps | grep -q kafka; then \
+	   ./start_kafka.sh; \
+	 else \
+	   echo "✅ Kafka already running"; \
+	 fi
+
+# Stop Kafka
+.PHONY: stop-kafka
+stop-kafka:
+	@echo "🛑 Stopping Kafka services..."
+	@docker stop kafka zookeeper 2>/dev/null || true
+	@docker rm kafka zookeeper 2>/dev/null || true
+	@echo "✅ Kafka stopped"
+
+# Setup Vertica tables
+.PHONY: setup-vertica
+setup-vertica:
+	@echo "🗄️  Setting up Vertica tables..."
+	@if command -v vsql >/dev/null 2>&1; then \
+	   vsql -h $(VERTICA_HOST) -p $(VERTICA_PORT) -U $(VERTICA_USER) -d $(VERTICA_DB) -f create_vertica_tables.sql; \
+	   echo "✅ Vertica tables created"; \
+	 else \
+	   echo "⚠️  vsql not found. Please run the SQL script manually:"; \
+	   echo "   vsql -h localhost -U dbadmin -d polygon_data -f create_vertica_tables.sql"; \
+	 fi
+
+# Monitor application
+.PHONY: monitor
+monitor:
+	@echo "📊 Monitoring application..."
+	@while true; do \
+	   echo "=== $$(date) ==="; \
+	   echo "Kafka topics:"; \
+	   docker exec kafka kafka-topics --list --bootstrap-server localhost:9092 2>/dev/null || echo "Kafka not available"; \
+	   echo ""; \
+	   echo "Application processes:"; \
+	   ps aux | grep $(APP_NAME) | grep -v grep || echo "Application not running"; \
+	   echo ""; \
+	   sleep 10; \
+	 done
+
+# Show logs
+.PHONY: logs
+logs:
+	@echo "📋 Showing application logs..."
+	@if [ -f $(APP_NAME).log ]; then \
+	   tail -f $(APP_NAME).log; \
+	 else \
+	   echo "No log file found. Run with: make run 2>&1 | tee $(APP_NAME).log"; \
+	 fi
+
+# Docker build
+.PHONY: docker-build
+docker-build:
+	@echo "🐳 Building Docker image..."
+	@docker build -t $(APP_NAME):latest .
+	@echo "✅ Docker image built: $(APP_NAME):latest"
+
+# Docker run
+.PHONY: docker-run
+docker-run:
+	@echo "🐳 Running Docker container..."
+	@docker run --rm -it \
+	   -e POLYGON_API_KEY="$(POLYGON_API_KEY)" \
+	   -e KAFKA_BROKERS="host.docker.internal:9092" \
+	   -e VERTICA_HOST="host.docker.internal" \
+	   --name $(APP_NAME) \
+	   $(APP_NAME):latest
+
+# Help
+.PHONY: help
+help:
+	@echo "📚 Available targets:"
+	@echo ""
+	@echo "  build         - Build the application"
+	@echo "  run           - Build and run the application"
+	@echo "  run-dev       - Run with development environment variables"
+	@echo "  test          - Run tests"
+	@echo "  clean         - Clean build artifacts"
+	@echo "  fmt           - Format Go code"
+	@echo "  lint          - Lint Go code"
+	@echo "  deps          - Install dependencies"
+	@echo "  release       - Create release build"
+	@echo "  setup         - Setup development environment"
+	@echo "  check         - Check prerequisites"
+	@echo "  start-kafka   - Start Kafka services"
+	@echo "  stop-kafka    - Stop Kafka services"
+	@echo "  setup-vertica - Setup Vertica tables"
+	@echo "  monitor       - Monitor application and services"
+	@echo "  logs          - Show application logs"
+	@echo "  docker-build  - Build Docker image"
+	@echo "  docker-run    - Run Docker container"
+	@echo "  help          - Show this help"
+	@echo ""
+	@echo "📋 Environment variables:"
+	@echo "  POLYGON_API_KEY - Your Polygon.io API key (required)"
+	@echo "  KAFKA_BROKERS   - Kafka broker addresses (default: localhost:9092)"
+	@echo "  VERTICA_HOST    - Vertica host (default: localhost)"
+	@echo "  VERTICA_USER    - Vertica username (default: dbadmin)"
+	@echo "  SYMBOLS         - Comma-separated symbols (default: AAPL,MSFT,GOOGL,AMZN,TSLA,NVDA)"
+
+# Default environment variables for development
+ifndef POLYGON_API_KEY
+export POLYGON_API_KEY := your_api_key_here
+endif
+
+ifndef VERTICA_HOST
+export VERTICA_HOST := localhost
+endif
+
+ifndef VERTICA_PORT
+export VERTICA_PORT := 5433
+endif
+
+ifndef VERTICA_DB
+export VERTICA_DB := polygon_data
+endif
+
+ifndef VERTICA_USER
+export VERTICA_USER := dbadmin
+endif
+
+ifndef VERTICA_PASS
+export VERTICA_PASS := 
+endif
+
