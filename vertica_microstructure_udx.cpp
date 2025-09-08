@@ -4,8 +4,11 @@
  * This UDx integrates the C++ microstructure surprise metrics library
  * with Vertica database to process market data and generate trading signals.
  * 
+ * FIXED VERSION: Uses proper Vertica SDK with Vertica.cpp linking
+ * Based on Vertica support recommendations for symbol resolution
+ * 
  * Usage:
- * 1. Compile this with the microstructure library
+ * 1. Compile this with the microstructure library using proper Makefile
  * 2. Load as Vertica UDx library
  * 3. Call from SQL to process market data and generate signals
  */
@@ -16,6 +19,8 @@
 #include <sstream>
 #include <chrono>
 #include <memory>
+#include <cmath>
+#include <algorithm>
 
 // Include the microstructure surprise metrics library
 // Note: You'll need to compile this with the microstructure library
@@ -296,7 +301,7 @@ public:
                 const auto& metric = metrics[i];
                 
                 outputWriter.setInt(0, metric.timestamp.count());
-                outputWriter.setVarchar(1, symbols[i]);
+                outputWriter.getStringRef(1).copy(symbols[i]);
                 outputWriter.setFloat(2, metric.standardized_return);
                 outputWriter.setFloat(3, metric.lee_mykland_stat);
                 outputWriter.setFloat(4, metric.bns_stat);
@@ -312,7 +317,7 @@ public:
                 } else if (metric.jump_detected && metric.standardized_return < -2.0f) {
                     signal = "SELL";
                 }
-                outputWriter.setVarchar(9, signal);
+                outputWriter.getStringRef(9).copy(signal);
                 
                 outputWriter.next();
             }
@@ -376,4 +381,5 @@ public:
 // Register the functions
 RegisterFactory(MicrostructureMetricsFactory);
 RegisterFactory(BatchMicrostructureFactory);
+
 

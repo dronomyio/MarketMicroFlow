@@ -1,4 +1,8 @@
--- Example: Using the Microstructure UDx in Vertica
+-- Example: Using the FIXED Microstructure UDx in Vertica
+-- This version uses the proper Vertica SDK with symbol resolution fixes
+
+-- 0. Install the UDx library (run this first)
+-- CREATE OR REPLACE LIBRARY MicrostructureLib AS '/opt/vertica/lib/libmicrostructure_udx.so';
 
 -- 1. Create tables for market data
 CREATE TABLE market_data (
@@ -71,3 +75,4 @@ FROM trading_signals ts
 JOIN market_data md ON ts.timestamp_ns = md.timestamp_ns AND ts.symbol = md.symbol
 WHERE ts.processed_at > NOW() - INTERVAL '24 hours'
 ORDER BY ts.timestamp_ns DESC;
+
